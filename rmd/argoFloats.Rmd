@@ -1,0 +1,123 @@
+---
+title: "Exploring ARGO data"
+author: "Nicholas Baetge"
+date: "3/4/2021"
+output: github_document
+---
+
+This project pulls [synthetic](https://argo.ucsd.edu/data/data-faq/#RorD) ARGO data from the [web](http://www.argodatamgt.org/Access-to-data/Access-via-FTP-or-HTTPS-on-GDAC) using the argoFloats package, which is still developing but is super sweet. That package can be found [here](https://argocanada.github.io/argoFloats/index.html) Data are then extracted from nested lists into a dataframe to ease exploration via ggplot. 
+
+# Libraries
+
+```{r}
+library(oce)
+library(ocedata)
+# library(devtools)
+#    install_github('dankelley/argoFloats', ref='develop')
+library(argoFloats)
+library(ncdf4)
+```
+
+# Download and Index
+
+```{r}
+synthetic <- getIndex("synthetic", destdir = "~/GITHUB/argo/synthetic_data/")
+
+from <- as.POSIXct("2020-03-01", tz = "UTC")
+to <- as.POSIXct("2021-03-07", tz = "UTC")
+subset.geo <- subset(synthetic, circle = list(longitude = -16.5, latitude = 49, radius = 222 )) 
+subset.time <- subset(subset.geo, time = list(from = from, to = to))  
+
+```
+
+# Plot Float Locations
+
+```{r}
+plot(subset.geo, bathymetry = FALSE, mar = par("mar"),  asp = 1 / cos(mean(range(unlist(subset.geo[["latitude"]]), na.rm = TRUE))*pi/180),  mgp = getOption("oceMgp"))
+
+```
+
+# Download and QC Indexed Profiles
+
+```{r}
+profiles <- getProfiles(subset.geo, destdir = "~/GITHUB/argo/synthetic_data/")
+argos <- readProfiles(profiles, destdir = "~/GITHUB/argo/synthetic_data/")
+argosClean <- applyQC(argos) #fills flagged bad data with "NA"
+
+ 
+```
+
+# Plot T-S
+
+```{r}
+plot(argosClean, which = "TS")
+```
+
+# Extract Data from Nested Lists
+
+```{r}
+library(tidyverse)
+library(lubridate)
+
+list <- argosClean@data$argos
+
+getdata <- function(i){x <- i@data }
+
+getnames <- function(i){x <- i@metadata$filename
+y <- gsub("/Users/nicholasbaetge/GITHUB/argo/synthetic_data/", "", x)
+z <- gsub(".nc", "", y)}
+
+data <- lapply(list, getdata)
+names <- lapply(list, getnames )
+
+names(data) <- names
+
+convert <- function(i) {
+   cols <- names(i)
+   i$time <- as.character(i$time)
+   b <- as.data.frame(do.call("cbind", i))
+   colnames(b) <- cols
+   c <- b %>% 
+  mutate_at(vars(-time), as.numeric) %>% 
+  mutate(date = ymd_hms(time),
+         year = year(date),
+         month = month(date)) %>% 
+  select(date, year, month, everything(), -time)
+  }
+
+data.convert <- lapply(data, convert)
+
+tidied <- plyr::ldply(data.convert, data.frame) %>% 
+  separate(.id, into = c("float", "profile"), sep = "_") 
+
+```
+
+# Plot Profiles
+
+```{r fig.height=6, fig.width=30, message=FALSE, warning=FALSE}
+
+library(viridis)
+library(ggpubr)
+
+tidied %>% 
+  filter(pressureAdjusted < 500) %>%
+  ggplot(aes(x = pressureAdjusted, y = temperatureAdjusted, group = interaction(float, profile))) +
+  facet_grid(~as.factor(month)) +
+  geom_line(aes(color = as.factor(year)), size = 2, alpha = 0.3) +
+  labs(x = "Pressure, dbar", y = "Temperature, ˚C", color = "Year") +
+  # expand_limits(x = 200) +
+  scale_x_reverse() +
+  coord_flip() +
+  scale_color_viridis_d() +
+  # guides(colour = F, fill = F, shape = F, linetype = F) +
+  theme_classic2(base_size = 20) +
+  theme(legend.title = element_blank(),
+        panel.spacing.x = unit(1, "cm"),
+        axis.text.x = element_text(angle = 0),
+        legend.key.size = unit(1, "cm"))
+
+```
+
+
+
+
